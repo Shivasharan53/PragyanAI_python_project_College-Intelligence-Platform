@@ -1,985 +1,622 @@
-import io
 import re
-import os
+from urllib.parse import quote_plus
+
 import pandas as pd
-import requests
+import plotly.express as px
 import streamlit as st
-import folium
-
-from streamlit_folium import st_folium
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
-
-
-# ==========================================================
-# CampusPulse — Live College Intelligence Platform
-# Powered by Shivasharanappa
-# ==========================================================
 
 st.set_page_config(
     page_title="CampusPulse | College Intelligence",
     page_icon="🎓",
     layout="wide",
-    initial_sidebar_state="expanded",
 )
 
-# -------------------------- CSS ----------------------------
-
+# -------------------- DESIGN --------------------
 st.markdown("""
 <style>
-.stApp {
-    background: #f3f7fc;
-    color: #142746;
-}
-.block-container {
-    max-width: 1800px;
-    padding: 1rem 1rem 2rem;
-}
-header[data-testid="stHeader"] {
-    background: #f3f7fc;
-}
-section[data-testid="stSidebar"] {
-    background: linear-gradient(180deg,#111d39,#172c49);
-}
-section[data-testid="stSidebar"] * {
-    color: #ffffff;
-}
-.cp-header {
-    background: linear-gradient(110deg,#151a48,#0755a1);
-    color: white;
-    padding: 20px 24px;
-    border: 1px solid #285a9b;
-    border-radius: 14px;
-    margin-bottom: 14px;
-}
-.cp-header h1 {
-    color: white;
-    font-size: clamp(25px,3vw,38px);
-    margin: 0;
-    line-height: 1.2;
-}
-.cp-header p {
-    margin: 5px 0 0;
-    color: #e4edff;
-}
-.cp-brand {
-    color: #ffd84d;
-    font-weight: 800;
-}
-.cp-card {
-    background: #ffffff;
-    border: 1px solid #d7e4f5;
-    border-radius: 12px;
-    padding: 14px;
-    margin-bottom: 10px;
-}
-.cp-heading {
-    font-size: 18px;
-    color: #073f91;
-    font-weight: 800;
-    margin-bottom: 4px;
-}
-.cp-muted {
-    font-size: 12px;
-    color: #62748e;
-}
-.cp-tier1 {
-    background: #e3fff0;
-    border: 1px solid #71d9a3;
-    border-radius: 10px;
-    padding: 10px;
-}
-.cp-tier2 {
-    background: #fff4d4;
-    border: 1px solid #edcd70;
-    border-radius: 10px;
-    padding: 10px;
-}
-.cp-tier3 {
-    background: #ffe7e7;
-    border: 1px solid #f2a0a0;
-    border-radius: 10px;
-    padding: 10px;
-}
-.cp-tier1 h4 {color:#075d3a;}
-.cp-tier2 h4 {color:#7d5100;}
-.cp-tier3 h4 {color:#a21f2b;}
-[data-testid="stMetric"] {
-    background: #fff;
-    border: 1px solid #d8e4f5;
-    border-radius: 10px;
-    padding: 10px;
-}
-.stButton > button {
-    border-radius: 8px;
-    min-height: 40px;
-    font-weight: 650;
-}
-a {overflow-wrap:anywhere;}
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+html, body, [class*="css"] {font-family:Inter,sans-serif;}
+.stApp {background:linear-gradient(135deg,#f1f6ff,#ffffff);}
+.block-container {padding-top:1rem;max-width:1600px;}
+.hero {background:linear-gradient(110deg,#111d49,#10488e,#0878d1);
+color:white;padding:22px;border-radius:16px;margin-bottom:14px;}
+.brand {font-size:2.1rem;font-weight:800;}
+.brand span {color:#35c5ff;}
+.power {text-align:right;font-weight:700;color:#ffda57;}
+.panel {background:white;border:1px solid #d8e5f8;border-radius:13px;
+padding:15px;margin-bottom:12px;}
+.panel-title {color:#10449b;font-weight:800;font-size:1.08rem;}
+.kpi {background:white;border:1px solid #d8e5f8;border-radius:13px;padding:16px;}
+.kpi-label {color:#627594;font-size:.82rem;font-weight:700;}
+.kpi-value {font-size:1.8rem;color:#1156b8;font-weight:800;}
+.stButton>button {border-radius:9px;font-weight:700;min-height:40px;}
+[data-testid="stSidebar"] {background:#122447;}
+[data-testid="stSidebar"] * {color:white;}
 </style>
 """, unsafe_allow_html=True)
 
+h1, h2 = st.columns([3, 1.5])
+with h1:
+    st.markdown("""
+    <div class="hero">
+      <div class="brand">🎓 Campus<span>Pulse</span></div>
+      <div>Live College Intelligence Platform</div>
+      <small>Discover · Analyze · Compare · Choose Smarter</small>
+    </div>
+    """, unsafe_allow_html=True)
+with h2:
+    st.markdown("""
+    <div class="hero power">
+      👑 Powered by: Shivasharanappa<br>
+      <small style="color:white">College Intelligence · RAG</small>
+    </div>
+    """, unsafe_allow_html=True)
 
-# ------------------------ SECRETS --------------------------
-
-def secret_value(name):
-    try:
-        return str(st.secrets.get(name, "")).strip()
-    except Exception:
-        return os.getenv(name, "").strip()
-
-
-GROQ_API_KEY = secret_value("GROQ_API_KEY")
-
-
-# --------------------- EXCEL HELPERS -----------------------
-
+# -------------------- COLUMN DETECTION --------------------
 ALIASES = {
-    "college": "College",
-    "college name": "College",
-    "name": "College",
-    "institution": "College",
-    "institution name": "College",
-    "city": "City",
-    "town": "City",
-    "district": "District",
-    "state": "State",
-    "website": "Website",
-    "web site": "Website",
-    "url": "Website",
-    "wikipedia": "Wikipedia",
-    "wikipedia url": "Wikipedia",
-    "address": "Address",
-    "full address": "Address",
-    "pin code": "PIN Code",
-    "pincode": "PIN Code",
-    "postal code": "PIN Code",
-    "affiliation": "Affiliation",
-    "affiliated to": "Affiliation",
-    "university affiliation": "Affiliation",
-    "status": "Status",
-    "college status": "Status",
-    "type": "Type",
-    "college type": "Type",
-    "institution type": "Type",
-    "latitude": "Latitude",
-    "longitude": "Longitude",
+    "name": ["college name", "clg name", "college", "institution",
+             "institution name", "institute name", "institute", "name"],
+    "city": ["city", "town", "place"],
+    "district": ["district", "dist", "district name"],
+    "taluk": ["taluk", "tq", "tehsil"],
+    "state": ["state", "state name"],
+    "website": ["website", "official website", "college website", "site"],
+    "wiki": ["wikipedia", "wiki", "wikipedia url"],
+    "address": ["address", "full address", "postal address"],
+    "pin": ["pin code", "pincode", "postal code", "zip code"],
+    "principal": ["principal name", "principal"],
+    "email": ["principal email", "email", "official email", "e-mail"],
+    "affiliation": ["affiliation", "university", "affiliated university",
+                    "affiliated to"],
+    "status": ["status", "college status", "autonomous status"],
+    "type": ["type", "college type", "institution type", "category"],
+    "latitude": ["latitude", "lat"],
+    "longitude": ["longitude", "long", "lng"],
+    "rating": ["rating", "google rating", "review rating"],
+    "reviews": ["review count", "number of reviews", "reviews"],
 }
 
+LABELS = {
+    "name": "College Name (required)", "city": "City",
+    "district": "District", "taluk": "Taluk", "state": "State",
+    "website": "Official Website", "wiki": "Wikipedia",
+    "address": "Address", "pin": "PIN Code",
+    "principal": "Principal Name", "email": "Principal Email",
+    "affiliation": "Affiliation / University", "status": "Status",
+    "type": "College Type", "latitude": "Latitude",
+    "longitude": "Longitude", "rating": "Rating",
+    "reviews": "Review Count",
+}
 
-def text(value):
-    if pd.isna(value):
-        return ""
-    return str(value).strip()
+def norm(value):
+    return re.sub(r"[^a-z0-9]+", " ", str(value).lower()).strip()
 
-
-def normalize_columns(df):
-    rename = {}
-
-    for col in df.columns:
-        key = re.sub(r"\s+", " ", str(col).strip().lower())
-        if key in ALIASES:
-            rename[col] = ALIASES[key]
-
-    return df.rename(columns=rename)
-
-
-def read_colleges(file):
-    df = pd.read_excel(file)
-    df = normalize_columns(df)
-
-    if "College" not in df.columns:
-        raise ValueError(
-            "Add a college-name column such as College, "
-            "College Name, Name, or Institution."
-        )
-
-    expected = [
-        "City", "District", "State", "Website", "Wikipedia",
-        "Address", "PIN Code", "Affiliation", "Status", "Type",
-        "Latitude", "Longitude",
-    ]
-
-    for col in expected:
-        if col not in df.columns:
-            df[col] = ""
-
-    df["College"] = df["College"].fillna("").astype(str).str.strip()
-    df = df[df["College"] != ""]
-    df = df.drop_duplicates(subset=["College"], keep="first")
-
-    return df.reset_index(drop=True)
-
-
-# -------------------- TIER CLASSIFICATION -----------------
-
-def classify_one(row):
-    """
-    Project-defined rules only.
-    The result is not an official ranking or accreditation.
-    """
-    status = text(row.get("Status", "")).lower()
-    kind = text(row.get("Type", "")).lower()
-    affiliation = text(row.get("Affiliation", "")).lower()
-
-    evidence = f"{status} {kind} {affiliation}"
-
-    if re.search(r"\bautonomous\b", evidence):
-        return (
-            "Tier 1",
-            "Autonomous status indicated in the spreadsheet",
-        )
-
-    if re.search(r"\buniversit(?:y|ies)\b", evidence):
-        return (
-            "Tier 1",
-            "University status indicated in the spreadsheet",
-        )
-
-    if "vtu" in evidence and "affiliat" in evidence:
-        return (
-            "Tier 1",
-            "VTU affiliation indicated in the spreadsheet",
-        )
-
-    if evidence.strip() and evidence.strip() not in {"nan", "none"}:
-        return (
-            "Tier 2",
-            "Institution details available; verify independently",
-        )
-
-    return (
-        "Tier 3",
-        "Insufficient institution or affiliation information",
-    )
-
-
-def classify_colleges(df):
-    result = df.copy()
-    pairs = result.apply(classify_one, axis=1)
-    result["Tier"] = [p[0] for p in pairs]
-    result["Reason"] = [p[1] for p in pairs]
+def detect_columns(columns):
+    result = {}
+    for field, aliases in ALIASES.items():
+        # Prefer exact normalized heading matches
+        for col in columns:
+            if norm(col) in [norm(a) for a in aliases]:
+                result[field] = col
+                break
+        # Then allow partial matches
+        if field not in result:
+            for col in columns:
+                if any(norm(a) in norm(col) for a in aliases):
+                    result[field] = col
+                    break
     return result
 
+def clean_df(df):
+    df = df.copy()
+    df = df.dropna(how="all").dropna(axis=1, how="all")
+    df.columns = [str(c).strip() for c in df.columns]
+    df = df.loc[:, [c for c in df.columns if c and not c.startswith("Unnamed:")]]
+    for c in df.select_dtypes(include="object").columns:
+        df[c] = df[c].fillna("").astype(str).str.strip()
+        df[c] = df[c].replace({"nan": "", "None": ""})
+    return df
 
-def to_excel(df):
-    buffer = io.BytesIO()
+def read_workbook(upload, sheet):
+    # Reads the chosen worksheet, regardless of its name
+    return clean_df(pd.read_excel(upload, sheet_name=sheet))
 
-    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
-        df.to_excel(writer, index=False, sheet_name="College Results")
+def classify(row, mapping):
+    values = " ".join(
+        str(row.get(mapping[k], ""))
+        for k in ["affiliation", "status", "type"]
+        if k in mapping
+    ).lower()
 
-    return buffer.getvalue()
+    if any(x in values for x in [
+        "autonomous", "deemed", "constituent", "university"
+    ]):
+        return pd.Series(["Tier 1", "Autonomous / university indicator"])
 
+    if any(x in values for x in [
+        "vtu", "affiliated", "recognized", "accredited", "naac", "nba"
+    ]):
+        return pd.Series(["Tier 2", "Affiliation / recognition indicator"])
 
-# ---------------------- FREE GEOCODING --------------------
+    return pd.Series(["Tier 3", "Needs verification / limited information"])
 
-@st.cache_data(ttl=86400, show_spinner=False)
-def lookup_location(query):
-    """Best-effort OpenStreetMap Nominatim lookup."""
-    if not query:
-        return None
+def process_data(raw, mapping):
+    name_col = mapping.get("name")
+    if not name_col:
+        return pd.DataFrame()
 
-    try:
-        response = requests.get(
-            "https://nominatim.openstreetmap.org/search",
-            params={
-                "q": query,
-                "format": "jsonv2",
-                "limit": 1,
-            },
-            headers={
-                "User-Agent": "CampusPulseCollegeExplorer/1.0"
-            },
-            timeout=12,
-        )
-        response.raise_for_status()
-        results = response.json()
+    df = raw.copy()
+    df[name_col] = df[name_col].fillna("").astype(str).str.strip()
+    df = df[(df[name_col] != "") & (df[name_col].str.lower() != "nan")]
+    df = df.drop_duplicates(subset=[name_col]).reset_index(drop=True)
 
-        if not results:
-            return None
+    df[["CampusPulse Tier", "Classification Reason"]] = df.apply(
+        lambda row: classify(row, mapping), axis=1
+    )
+    return df
 
-        item = results[0]
-        return {
-            "lat": float(item["lat"]),
-            "lon": float(item["lon"]),
-            "address": item.get("display_name", query),
-        }
-    except Exception:
-        return None
+def value(row, mapping, field):
+    col = mapping.get(field)
+    if not col or col not in row.index:
+        return ""
+    v = row[col]
+    return "" if pd.isna(v) else str(v).strip()
 
+def google_maps(name, city=""):
+    return "https://www.google.com/maps/search/" + quote_plus(name + " " + city)
 
-def college_location(row):
-    try:
-        lat = float(row.get("Latitude", ""))
-        lon = float(row.get("Longitude", ""))
-
-        if -90 <= lat <= 90 and -180 <= lon <= 180:
-            if lat != 0 and lon != 0:
-                return {
-                    "lat": lat,
-                    "lon": lon,
-                    "address": text(row.get("Address", "")),
-                }
-    except (ValueError, TypeError):
-        pass
-
-    parts = [
-        text(row.get("College", "")),
-        text(row.get("Address", "")),
-        text(row.get("City", "")),
-        text(row.get("District", "")),
-        text(row.get("State", "")),
-        text(row.get("PIN Code", "")),
-    ]
-    return lookup_location(", ".join(p for p in parts if p))
-
-
-# ----------------------- RAG RETRIEVAL ---------------------
-
-def row_to_document(row):
-    fields = [
-        "College", "City", "District", "State", "Address",
-        "PIN Code", "Website", "Wikipedia", "Affiliation",
-        "Status", "Type", "Tier", "Reason",
-    ]
-
-    return "\n".join(
-        f"{key}: {text(row.get(key, ''))}"
-        for key in fields
-        if text(row.get(key, ""))
+def review_search(name, city=""):
+    return "https://www.google.com/search?q=" + quote_plus(
+        name + " " + city + " college reviews"
     )
 
+def display_table(df, mapping):
+    rename = {
+        "name": "College Name", "city": "City", "district": "District",
+        "taluk": "Taluk", "state": "State", "website": "Website",
+        "wiki": "Wikipedia", "affiliation": "Affiliation",
+        "status": "Status", "type": "Type",
+    }
+    out = pd.DataFrame(index=df.index)
+    for field, label in rename.items():
+        col = mapping.get(field)
+        if col and col in df.columns:
+            out[label] = df[col]
+    out["Tier"] = df["CampusPulse Tier"]
+    out["Reason"] = df["Classification Reason"]
+    st.dataframe(out, use_container_width=True, hide_index=True)
 
-def retrieve(question, df, limit=5):
-    if df.empty:
-        return []
-
-    docs = [row_to_document(row) for _, row in df.iterrows()]
-
-    if not docs or not any(docs):
-        return []
-
-    try:
-        vectorizer = TfidfVectorizer(
-            stop_words="english",
-            ngram_range=(1, 2),
-        )
-        matrix = vectorizer.fit_transform(docs + [question])
-        scores = cosine_similarity(
-            matrix[-1], matrix[:-1]
-        ).flatten()
-
-        order = scores.argsort()[::-1][:limit]
-
-        return [
-            docs[i]
-            for i in order
-            if scores[i] > 0
-        ]
-    except ValueError:
-        return []
-
-
-def answer_question(question, df):
-    documents = retrieve(question, df)
-
-    if not documents:
-        return (
-            "I couldn't find a matching college record. "
-            "Try a college name, city, affiliation, or website."
-        )
-
-    context = "\n\n---\n\n".join(documents)
-
-    if not GROQ_API_KEY:
-        return (
-            "**Matching records from your Excel data**\n\n"
-            "AI generation is not configured, so here are the retrieved "
-            "records instead:\n\n" + context
-        )
-
-    try:
-        from langchain_groq import ChatGroq
-        from langchain_core.messages import SystemMessage, HumanMessage
-
-        model = ChatGroq(
-            model="openai/gpt-oss-120b",
-            api_key=GROQ_API_KEY,
-            temperature=0.2,
-            max_tokens=1200,
-        )
-
-        response = model.invoke([
-            SystemMessage(content=(
-                "You are the CampusPulse college assistant. Answer using "
-                "only the supplied college records. If the answer is "
-                "missing, say so. Never invent addresses, affiliations, "
-                "ratings, or reviews.\n\n"
-                f"COLLEGE RECORDS:\n{context}"
-            )),
-            HumanMessage(content=question),
-        ])
-
-        return response.content
-
-    except Exception as exc:
-        return (
-            "The records were retrieved, but AI generation failed. "
-            f"Check your optional Groq configuration. Details: {exc}\n\n"
-            + context
-        )
-
-
-# ---------------------- SESSION STATE ---------------------
-
-for key, initial in {
-    "colleges": pd.DataFrame(),
-    "results": pd.DataFrame(),
-    "upload_name": "",
-    "chat": [],
-}.items():
-    if key not in st.session_state:
-        st.session_state[key] = initial
-
-
-# --------------------------- HEADER ------------------------
-
-st.markdown("""
-<div class="cp-header">
-  <h1>🎓 CampusPulse</h1>
-  <p>Live College Intelligence Platform</p>
-  <p>Excel Extractor &nbsp; | &nbsp; Tier Classification &nbsp; | &nbsp;
-  Live Location &nbsp; | &nbsp; Reviews &nbsp; | &nbsp; RAG Assistant</p>
-  <p class="cp-brand">👑 Powered by: Shivasharanappa</p>
-</div>
-""", unsafe_allow_html=True)
-
-
-# ------------------------- SIDEBAR -------------------------
+# -------------------- SESSION STATE --------------------
+if "data" not in st.session_state:
+    st.session_state.data = None
+if "mapping" not in st.session_state:
+    st.session_state.mapping = {}
+if "source" not in st.session_state:
+    st.session_state.source = ""
 
 with st.sidebar:
     st.markdown("## 🎓 CampusPulse")
-    st.caption("College Intelligence Platform")
-
     page = st.radio(
-        "Navigation",
-        [
-            "Dashboard",
-            "Upload & Process",
-            "Tier Results",
-            "College Search",
-            "College Map",
-            "Reviews",
-            "RAG Chatbot",
-            "About",
-        ],
+        "NAVIGATION",
+        ["Dashboard", "Upload & Process", "Tier Results",
+         "College Search", "College Map", "Reviews", "RAG Chatbot", "About"]
     )
-
     st.divider()
-    st.caption("Discover · Analyze · Compare · Choose Smarter")
+    if st.session_state.data is not None:
+        st.success(f"{len(st.session_state.data)} colleges loaded")
+    else:
+        st.info("Upload an Excel workbook to begin.")
 
+def ready():
+    if st.session_state.data is None or st.session_state.data.empty:
+        st.warning("Please upload and process a workbook in Upload & Process.")
+        return False
+    return True
 
-# --------------------- UPLOAD & PREVIEW --------------------
-
-if page in ["Dashboard", "Upload & Process"]:
-    upload_col, preview_col = st.columns([0.9, 1.25], gap="medium")
-
-    with upload_col:
-        st.markdown(
-            '<div class="cp-card"><div class="cp-heading">'
-            '📗 1. Upload Excel File</div>'
-            '<div class="cp-muted">Extract college names, cities, websites, etc.</div></div>',
-            unsafe_allow_html=True,
-        )
-
-        uploaded = st.file_uploader(
-            "Drag and drop your Excel file",
-            type=["xlsx", "xls"],
-            key="college_file",
-        )
-
-        if uploaded is not None:
-            try:
-                if st.session_state.upload_name != uploaded.name:
-                    st.session_state.colleges = read_colleges(uploaded)
-                    st.session_state.results = pd.DataFrame()
-                    st.session_state.upload_name = uploaded.name
-                    st.session_state.chat = []
-
-                st.success(
-                    f"{uploaded.name} · "
-                    f"{len(st.session_state.colleges)} colleges loaded"
-                )
-
-            except Exception as exc:
-                st.error(f"Excel error: {exc}")
-
-        if st.button("Clear uploaded data", use_container_width=True):
-            st.session_state.colleges = pd.DataFrame()
-            st.session_state.results = pd.DataFrame()
-            st.session_state.upload_name = ""
-            st.session_state.chat = []
-            st.rerun()
-
-    with preview_col:
-        df = st.session_state.colleges
-
-        st.markdown(
-            '<div class="cp-card"><div class="cp-heading">'
-            '📋 2. Extracted Colleges (Preview)</div></div>',
-            unsafe_allow_html=True,
-        )
-
-        st.metric("Total Colleges Found", len(df))
-
-        if not df.empty:
-            query = st.text_input(
-                "Search college name, city or keyword",
-                key="preview_query",
-            )
-
-            preview = df
-            if query:
-                mask = df.fillna("").astype(str).apply(
-                    lambda col: col.str.contains(
-                        query, case=False, regex=False
-                    )
-                ).any(axis=1)
-                preview = df[mask]
-
-            cols = [
-                c for c in [
-                    "College", "City", "District", "State",
-                    "Website", "Wikipedia",
-                ]
-                if c in preview.columns
-            ]
-
-            st.dataframe(
-                preview[cols],
-                use_container_width=True,
-                hide_index=True,
-                height=260,
-            )
-
-            st.download_button(
-                "⬇ Download Extracted Excel",
-                data=to_excel(df),
-                file_name="campuspulse_extracted.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True,
-            )
-        else:
-            st.info("Upload an Excel file to display college records.")
-
-
-# ---------------------- SELECT & PROCESS -------------------
-
-if page in ["Dashboard", "Upload & Process"]:
-    st.markdown(
-        '<div class="cp-heading">✅ 3. Select Colleges & Process</div>',
-        unsafe_allow_html=True,
+# -------------------- UPLOAD PAGE --------------------
+if page == "Upload & Process":
+    st.markdown("## 📥 1. Upload Excel File")
+    st.write(
+        "CampusPulse checks every worksheet. It supports different column "
+        "names and includes manual mapping when automatic detection fails."
+    )
+    uploaded = st.file_uploader(
+        "Upload an Excel workbook", type=["xlsx", "xls"]
     )
 
-    df = st.session_state.colleges
+    if uploaded:
+        try:
+            workbook = pd.ExcelFile(uploaded)
+            sheet = st.selectbox("Choose worksheet", workbook.sheet_names)
+            raw = read_workbook(uploaded, sheet)
+            detected = detect_columns(raw.columns)
 
-    if not df.empty:
-        names = df["College"].astype(str).tolist()
+            st.success(
+                f"Worksheet: {sheet} · {len(raw)} rows · "
+                f"{len(raw.columns)} columns"
+            )
+            st.markdown("### Map your columns")
+            st.caption(
+                "Automatic matches are selected. Only College Name is required."
+            )
+            options = ["— Not available —"] + list(raw.columns)
+            mapping = {}
+            cols = st.columns(3)
+            for i, field in enumerate(LABELS):
+                with cols[i % 3]:
+                    default = detected.get(field)
+                    index = options.index(default) if default in options else 0
+                    selected = st.selectbox(
+                        LABELS[field], options, index=index,
+                        key=f"mapping_{field}"
+                    )
+                    if selected != "— Not available —":
+                        mapping[field] = selected
 
-        selected = st.multiselect(
-            "Search and select colleges",
-            options=names,
-            key="selected_colleges",
-        )
+            st.markdown("### Preview")
+            st.dataframe(raw.head(8), use_container_width=True)
 
-        select_col, process_col = st.columns(2)
-
-        with select_col:
-            if st.button("✅ Select All", use_container_width=True):
-                st.session_state.selected_colleges = names
-                st.rerun()
-
-        with process_col:
-            if st.button(
-                "▶ Process",
-                type="primary",
-                use_container_width=True,
-            ):
-                chosen_names = st.session_state.get(
-                    "selected_colleges", []
+            if not mapping.get("name"):
+                st.warning(
+                    "Choose the column that contains college names."
                 )
-
-                if not chosen_names:
-                    st.warning("Select one or more colleges first.")
+            elif st.button(
+                "✅ Process Colleges", type="primary",
+                use_container_width=True
+            ):
+                result = process_data(raw, mapping)
+                if result.empty:
+                    st.error("No college names were found in that column.")
                 else:
-                    chosen = df[
-                        df["College"].astype(str).isin(chosen_names)
-                    ].copy()
+                    st.session_state.data = result
+                    st.session_state.mapping = mapping
+                    st.session_state.source = uploaded.name
+                    st.success(f"Processed {len(result)} unique colleges.")
+                    st.rerun()
+        except Exception as exc:
+            st.error(f"Could not read this Excel workbook: {exc}")
+            st.info("Try saving your workbook as .xlsx and uploading again.")
 
-                    st.session_state.results = classify_colleges(chosen)
-                    st.success(f"Processed {len(chosen)} colleges.")
-
-        st.caption(
-            "Classification follows configurable project rules; "
-            "it is not an official academic ranking."
-        )
+# -------------------- DASHBOARD PAGE --------------------
+elif page == "Dashboard":
+    if not ready():
+        st.markdown("""
+        <div class="panel">
+          <div class="panel-title">Welcome to CampusPulse</div>
+          Upload your college Excel file to extract college records, classify
+          institutions, compare details and ask questions through RAG.
+        </div>
+        """, unsafe_allow_html=True)
+        a, b, c = st.columns(3)
+        a.info("📥 Excel extractor\n\nAutomatic detection + manual mapping.")
+        b.info("🏅 Tier classification\n\nTransparent rules and explanations.")
+        c.info("🤖 RAG assistant\n\nRetrieve evidence from your workbook.")
     else:
-        st.info("Upload Excel to enable selection and processing.")
-
-
-# --------------------- TIER RESULT TABLES ------------------
-
-if page in ["Dashboard", "Tier Results"]:
-    st.markdown("## 📊 Tier Classification Results")
-
-    results = st.session_state.results
-
-    if not results.empty:
-        columns = st.columns(3, gap="small")
-
-        tier_configs = [
-            (columns[0], "Tier 1", "🏅 Tier 1 Colleges", "cp-tier1"),
-            (columns[1], "Tier 2", "🏆 Tier 2 Colleges", "cp-tier2"),
-            (columns[2], "Tier 3", "🛡 Tier 3 Colleges", "cp-tier3"),
+        df = st.session_state.data
+        mapping = st.session_state.mapping
+        k1, k2, k3, k4 = st.columns(4)
+        metrics = [
+            ("TOTAL COLLEGES", len(df)),
+            ("TIER 1", int((df["CampusPulse Tier"] == "Tier 1").sum())),
+            ("TIER 2", int((df["CampusPulse Tier"] == "Tier 2").sum())),
+            ("TIER 3", int((df["CampusPulse Tier"] == "Tier 3").sum())),
         ]
-
-        for col, tier, label, css in tier_configs:
-            subset = results[results["Tier"] == tier]
-
+        for col, (label, number) in zip([k1, k2, k3, k4], metrics):
             with col:
                 st.markdown(
-                    f'<div class="{css}"><h4>{label}</h4>'
-                    f'<b>{len(subset)} colleges</b></div>',
-                    unsafe_allow_html=True,
+                    f'<div class="kpi"><div class="kpi-label">{label}</div>'
+                    f'<div class="kpi-value">{number:,}</div></div>',
+                    unsafe_allow_html=True
                 )
 
-                visible = [
-                    c for c in ["College", "City", "Type", "Reason"]
-                    if c in subset.columns
-                ]
-
-                st.dataframe(
-                    subset[visible],
-                    use_container_width=True,
-                    hide_index=True,
-                    height=240,
-                )
-
-        st.download_button(
-            "⬇ Download Classified Excel",
-            data=to_excel(results),
-            file_name="campuspulse_classified.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        )
-    else:
-        st.info("Upload Excel and click Process to see tier tables.")
-
-
-# ----------------------- COLLEGE DETAILS -------------------
-
-if page in ["Dashboard", "College Search"]:
-    if page == "College Search":
-        st.header("🔎 College Search")
-    else:
-        st.markdown("## ℹ️ College Details")
-
-    df = st.session_state.colleges
-
-    if df.empty:
-        st.info("Upload a college spreadsheet first.")
-    else:
-        query = st.text_input(
-            "Find a college by name or city",
-            key="detail_query",
-        )
-
-        matches = df
-
-        if query:
-            mask = df.fillna("").astype(str).apply(
-                lambda col: col.str.contains(
-                    query, case=False, regex=False
-                )
-            ).any(axis=1)
-            matches = df[mask]
-
-        if not matches.empty:
-            college_name = st.selectbox(
-                "Selected college",
-                matches["College"].astype(str).tolist(),
-                key="detail_college",
+        left, right = st.columns(2)
+        with left:
+            st.markdown("### 🏅 Tier Classification Results")
+            counts = df["CampusPulse Tier"].value_counts().reindex(
+                ["Tier 1", "Tier 2", "Tier 3"], fill_value=0
+            ).rename_axis("Tier").reset_index(name="Colleges")
+            fig = px.bar(
+                counts, x="Tier", y="Colleges", text="Colleges",
+                color="Tier",
+                color_discrete_map={
+                    "Tier 1": "#16b86b", "Tier 2": "#f3ad16",
+                    "Tier 3": "#ef4444"
+                }
             )
+            fig.update_layout(height=300, showlegend=False)
+            st.plotly_chart(fig, use_container_width=True)
 
-            row = matches[
-                matches["College"].astype(str) == college_name
-            ].iloc[0]
-
-            detail_col, links_col = st.columns([1.4, 1])
-
-            with detail_col:
-                fields = [
-                    "College", "City", "District", "State", "Address",
-                    "PIN Code", "Website", "Wikipedia", "Affiliation",
-                    "Status", "Type",
-                ]
-
-                detail_rows = [
-                    {"Field": field, "Value": text(row.get(field, ""))}
-                    for field in fields
-                    if text(row.get(field, ""))
-                ]
-
-                st.dataframe(
-                    pd.DataFrame(detail_rows),
-                    use_container_width=True,
-                    hide_index=True,
-                )
-
-            with links_col:
-                website = text(row.get("Website", ""))
-                wiki = text(row.get("Wikipedia", ""))
-
-                if website.startswith(("https://", "http://")):
-                    st.link_button(
-                        "🌐 Open Official Website",
-                        website,
-                        use_container_width=True,
-                    )
-
-                if wiki.startswith(("https://", "http://")):
-                    st.link_button(
-                        "📖 Open Wikipedia",
-                        wiki,
-                        use_container_width=True,
-                    )
-
-                maps_query = requests.utils.quote(
-                    ", ".join(
-                        x for x in [
-                            college_name,
-                            text(row.get("City", "")),
-                            text(row.get("State", "")),
-                        ] if x
-                    )
-                )
-
-                st.link_button(
-                    "📍 Search on OpenStreetMap",
-                    f"https://www.openstreetmap.org/search?query={maps_query}",
-                    use_container_width=True,
-                )
-        else:
-            st.warning("No colleges match your search.")
-
-
-# ------------------------- LOCATION MAP --------------------
-
-if page in ["Dashboard", "College Map"]:
-    if page == "College Map":
-        st.header("📍 College Location Map")
-    else:
-        st.markdown("## 📍 College Location Map")
-
-    df = st.session_state.colleges
-
-    if df.empty:
-        st.info("Upload college data to explore locations.")
-    else:
-        map_name = st.selectbox(
-            "Choose a college to locate",
-            df["College"].astype(str).tolist(),
-            key="map_college",
-        )
-
-        row = df[df["College"].astype(str) == map_name].iloc[0]
-
-        parts = [
-            text(row.get("Address", "")),
-            text(row.get("City", "")),
-            text(row.get("District", "")),
-            text(row.get("State", "")),
-            text(row.get("PIN Code", "")),
-        ]
-        address = ", ".join(p for p in parts if p)
-
-        st.write(f"**College:** {map_name}")
-        st.write(f"**Address in your data:** {address or 'Not provided'}")
-
-        if st.button("Find college location"):
-            with st.spinner("Searching OpenStreetMap..."):
-                location = college_location(row)
-
-            if location:
-                map_obj = folium.Map(
-                    location=[location["lat"], location["lon"]],
-                    zoom_start=15,
-                )
-
-                folium.Marker(
-                    [location["lat"], location["lon"]],
-                    tooltip=map_name,
-                    popup=location.get("address", map_name),
-                ).add_to(map_obj)
-
-                st_folium(
-                    map_obj,
-                    use_container_width=True,
-                    height=420,
-                    key="campuspulse_map",
-                )
-
-                st.caption(
-                    "Geocoding is approximate. Verify the pin against "
-                    "the college's official address."
-                )
+        with right:
+            st.markdown("### 📍 Colleges by City")
+            city_col = mapping.get("city")
+            if city_col and city_col in df.columns:
+                counts = df[city_col].replace("", pd.NA).dropna().value_counts()
+                counts = counts.head(10).rename_axis("City").reset_index(name="Colleges")
+                fig = px.bar(counts, x="Colleges", y="City", orientation="h")
+                fig.update_layout(height=300, yaxis={"categoryorder": "total ascending"})
+                st.plotly_chart(fig, use_container_width=True)
             else:
-                st.warning(
-                    "Location not found. Add a complete address or "
-                    "latitude and longitude to the Excel sheet."
+                st.info("City data was not detected in the uploaded workbook.")
+
+        st.markdown("### 📋 Extracted Colleges (Preview)")
+        search = st.text_input("Search college name, city or keyword")
+        view = df
+        if search:
+            mask = df.astype(str).apply(
+                lambda col: col.str.contains(search, case=False, na=False)
+            ).any(axis=1)
+            view = df[mask]
+        display_table(view.head(200), mapping)
+        st.download_button(
+            "⬇️ Download processed CSV",
+            df.to_csv(index=False).encode("utf-8-sig"),
+            "campuspulse_processed.csv", "text/csv",
+            type="primary"
+        )
+
+# -------------------- TIER RESULTS --------------------
+elif page == "Tier Results":
+    st.markdown("## 🏅 Tier Classification Results")
+    if ready():
+        df = st.session_state.data
+        mapping = st.session_state.mapping
+        st.warning(
+            "Tiers are keyword-based indicators, not official rankings or "
+            "accreditation results. Verify college details independently."
+        )
+        tabs = st.tabs(["Tier 1", "Tier 2", "Tier 3", "All Colleges"])
+        for tab, tier in zip(tabs, ["Tier 1", "Tier 2", "Tier 3", "ALL"]):
+            with tab:
+                sub = df if tier == "ALL" else df[df["CampusPulse Tier"] == tier]
+                st.metric("Colleges", len(sub))
+                display_table(sub, mapping)
+                st.download_button(
+                    f"Download {tier} CSV",
+                    sub.to_csv(index=False).encode("utf-8-sig"),
+                    f"{tier.lower().replace(' ', '_')}.csv",
+                    "text/csv", key=f"download_{tier}"
                 )
 
+# -------------------- COLLEGE SEARCH --------------------
+elif page == "College Search":
+    st.markdown("## 🔎 College Search & Compare")
+    if ready():
+        df = st.session_state.data
+        mapping = st.session_state.mapping
+        name_col = mapping["name"]
+        names = df[name_col].astype(str).tolist()
+        selected = st.selectbox("Select a college", names)
+        row = df[df[name_col].astype(str) == selected].iloc[0]
+        left, right = st.columns([1.3, 1])
 
-# ----------------------- REVIEWS PANEL ---------------------
+        with left:
+            st.markdown("### College Profile")
+            st.subheader(selected)
+            for field, label in [
+                ("city", "City"), ("district", "District"),
+                ("taluk", "Taluk"), ("state", "State"),
+                ("address", "Address"), ("pin", "PIN Code"),
+                ("principal", "Principal"), ("email", "Principal Email"),
+                ("affiliation", "Affiliation"), ("status", "Status"),
+                ("type", "Type"),
+            ]:
+                v = value(row, mapping, field)
+                if v:
+                    st.write(f"**{label}:** {v}")
 
-if page in ["Dashboard", "Reviews"]:
-    if page == "Reviews":
-        st.header("⭐ Reviews & Ratings")
-    else:
-        st.markdown("## ⭐ Reviews & Ratings")
+            for field, label in [("website", "Official Website"), ("wiki", "Wikipedia")]:
+                v = value(row, mapping, field)
+                if v:
+                    url = v if v.startswith(("http://", "https://")) else "https://" + v
+                    st.markdown(f"**{label}:** [{v}]({url})")
 
-    df = st.session_state.colleges
-
-    if df.empty:
-        st.info("Upload college data first.")
-    else:
-        review_name = st.selectbox(
-            "Choose a college",
-            df["College"].astype(str).tolist(),
-            key="review_college",
-        )
-
-        review_row = df[
-            df["College"].astype(str) == review_name
-        ].iloc[0]
-
-        review_city = text(review_row.get("City", ""))
-        review_query = requests.utils.quote(
-            f"{review_name} {review_city} reviews"
-        )
-
-        st.markdown(
-            "**Live review links**\n\n"
-            "This version does not invent ratings or student reviews."
-        )
-
-        st.link_button(
-            "⭐ Search Google reviews",
-            f"https://www.google.com/search?q={review_query}",
-            use_container_width=True,
-        )
-
-        st.link_button(
-            "🗺 Search OpenStreetMap",
-            f"https://www.openstreetmap.org/search?query={review_query}",
-            use_container_width=True,
-        )
-
-        st.caption(
-            "Google search opens public listings when available. "
-            "This link does not retrieve or verify review scores inside "
-            "CampusPulse. Direct in-dashboard reviews require a supported "
-            "data provider."
-        )
-
-
-# ------------------------- RAG CHATBOT ---------------------
-
-if page in ["Dashboard", "RAG Chatbot"]:
-    if page == "RAG Chatbot":
-        st.header("💬 RAG College Assistant")
-    else:
-        st.markdown("## 💬 RAG Chatbot — Ask about Colleges")
-
-    df = st.session_state.colleges
-
-    if df.empty:
-        st.info("Upload an Excel sheet to create the searchable knowledge base.")
-    else:
-        st.caption(
-            "Answers use records retrieved from your uploaded Excel data. "
-            "Groq is optional."
-        )
-
-        examples = [
-            "Show Tier 1 colleges in Bengaluru",
-            "Which colleges are autonomous?",
-            "Find VTU-affiliated colleges",
-            "Compare two colleges",
-        ]
-
-        prompt_choice = st.selectbox(
-            "Try a sample question",
-            ["Choose a sample..."] + examples,
-            key="rag_example",
-        )
-
-        with st.form("rag_form", clear_on_submit=True):
-            question = st.text_input(
-                "Ask your college question",
-                value="" if prompt_choice == "Choose a sample..." else prompt_choice,
-                placeholder="Example: Which colleges are in Bengaluru?",
+            st.write(
+                f"**CampusPulse tier:** {row['CampusPulse Tier']} — "
+                f"{row['Classification Reason']}"
             )
 
-            submitted = st.form_submit_button("➤ Ask CampusPulse")
+        with right:
+            city = value(row, mapping, "city")
+            st.markdown("### Quick Links")
+            st.link_button(
+                "🌐 Official Website",
+                value(row, mapping, "website")
+                if value(row, mapping, "website").startswith(("http://", "https://"))
+                else "https://www.google.com/search?q=" + quote_plus(selected + " official website"),
+                use_container_width=True
+            )
+            st.link_button("📍 Google Maps", google_maps(selected, city),
+                           use_container_width=True)
+            st.link_button("⭐ Public Reviews", review_search(selected, city),
+                           use_container_width=True)
+            st.link_button(
+                "📚 Wikipedia Search",
+                "https://en.wikipedia.org/w/index.php?search=" + quote_plus(selected),
+                use_container_width=True
+            )
 
-        if submitted and question.strip():
-            with st.spinner("Searching college records..."):
-                answer = answer_question(
-                    question.strip(),
-                    st.session_state.results
-                    if not st.session_state.results.empty
-                    else df,
+        st.markdown("### Compare Colleges")
+        compare = st.multiselect("Choose up to four colleges", names,
+                                 default=[selected], max_selections=4)
+        if compare:
+            display_table(df[df[name_col].astype(str).isin(compare)], mapping)
+
+# -------------------- COLLEGE MAP --------------------
+elif page == "College Map":
+    st.markdown("## 📍 College Map")
+    if ready():
+        df = st.session_state.data
+        mapping = st.session_state.mapping
+        lat_col, lon_col = mapping.get("latitude"), mapping.get("longitude")
+
+        if lat_col and lon_col:
+            import pydeck as pdk
+            coords = df.copy()
+            coords["_lat"] = pd.to_numeric(coords[lat_col], errors="coerce")
+            coords["_lon"] = pd.to_numeric(coords[lon_col], errors="coerce")
+            coords = coords[
+                coords["_lat"].between(-90, 90) &
+                coords["_lon"].between(-180, 180)
+            ]
+            if not coords.empty:
+                st.pydeck_chart(pdk.Deck(
+                    initial_view_state=pdk.ViewState(
+                        latitude=float(coords["_lat"].mean()),
+                        longitude=float(coords["_lon"].mean()),
+                        zoom=5
+                    ),
+                    layers=[pdk.Layer(
+                        "ScatterplotLayer", data=coords,
+                        get_position="[_lon, _lat]", get_radius=2500,
+                        get_fill_color=[20, 100, 240, 180], pickable=True
+                    )]
+                ), use_container_width=True)
+            else:
+                st.info("No valid latitude/longitude values were found.")
+        else:
+            st.info(
+                "No coordinates were supplied. CampusPulse will not invent "
+                "map locations; use the Google Maps search links below."
+            )
+
+        for _, row in df.head(100).iterrows():
+            name = value(row, mapping, "name")
+            city = value(row, mapping, "city")
+            st.markdown(f"- [{name} on Google Maps]({google_maps(name, city)})")
+
+# -------------------- REVIEWS --------------------
+elif page == "Reviews":
+    st.markdown("## ⭐ Reviews & Ratings")
+    if ready():
+        df = st.session_state.data
+        mapping = st.session_state.mapping
+        st.info(
+            "Ratings and reviews are not fabricated. Supplied rating fields "
+            "are shown when available; otherwise use public review links."
+        )
+        rating_col, reviews_col = mapping.get("rating"), mapping.get("reviews")
+        if rating_col or reviews_col:
+            cols = [mapping["name"]]
+            cols += [c for c in [rating_col, reviews_col] if c and c not in cols]
+            st.dataframe(df[cols], use_container_width=True, hide_index=True)
+
+        for _, row in df.head(100).iterrows():
+            name = value(row, mapping, "name")
+            city = value(row, mapping, "city")
+            with st.expander(f"⭐ {name}"):
+                if rating_col:
+                    st.write("Workbook rating:", row[rating_col])
+                if reviews_col:
+                    st.write("Workbook review count:", row[reviews_col])
+                st.link_button("Search Public Reviews", review_search(name, city))
+                st.link_button("Google Maps", google_maps(name, city))
+
+# -------------------- RAG CHATBOT --------------------
+elif page == "RAG Chatbot":
+    st.markdown("## 🤖 CampusPulse RAG Assistant")
+    st.write("Ask questions about the college records in your uploaded workbook.")
+
+    if ready():
+        df = st.session_state.data
+        question = st.chat_input("Ask about college names, cities, tiers or affiliation")
+
+        if "chat_history" not in st.session_state:
+            st.session_state.chat_history = []
+        if "rag_evidence" not in st.session_state:
+            st.session_state.rag_evidence = []
+
+        if question:
+            documents = df.astype(str).agg(" | ".join, axis=1).tolist()
+            results = []
+            try:
+                from sklearn.feature_extraction.text import TfidfVectorizer
+                from sklearn.metrics.pairwise import cosine_similarity
+                vectorizer = TfidfVectorizer(
+                    ngram_range=(1, 2), stop_words="english"
+                )
+                matrix = vectorizer.fit_transform(documents + [question])
+                scores = cosine_similarity(matrix[-1], matrix[:-1]).ravel()
+                indices = scores.argsort()[::-1][:5]
+                results = [
+                    documents[i] for i in indices if scores[i] > 0
+                ]
+            except Exception:
+                q = set(norm(question).split())
+                results = sorted(
+                    documents,
+                    key=lambda doc: len(q & set(norm(doc).split())),
+                    reverse=True
+                )[:5]
+
+            answer = ""
+            context = "\n\n".join(results)
+
+            # Add GROQ_API_KEY under Streamlit Secrets for generated answers.
+            try:
+                api_key = st.secrets.get("GROQ_API_KEY", "")
+            except Exception:
+                api_key = ""
+
+            if api_key and results:
+                try:
+                    from groq import Groq
+                    client = Groq(api_key=api_key)
+                    response = client.chat.completions.create(
+                        model="llama-3.3-70b-versatile",
+                        messages=[
+                            {
+                                "role": "system",
+                                "content": (
+                                    "You are CampusPulse. Answer only from "
+                                    "the spreadsheet context. If information "
+                                    "is missing, say so. Never invent ratings, "
+                                    "fees, accreditation or reviews."
+                                )
+                            },
+                            {
+                                "role": "user",
+                                "content": f"Question: {question}\n\nContext:\n{context}"
+                            }
+                        ],
+                        temperature=0.2
+                    )
+                    answer = response.choices[0].message.content
+                except Exception:
+                    answer = "The AI service was unavailable. Here are the matching spreadsheet records."
+
+            if not answer:
+                answer = (
+                    "These are the closest matching spreadsheet records. "
+                    "For generated AI answers, configure GROQ_API_KEY in "
+                    "Streamlit Secrets.\n\n" + (context or "No matching records found.")
                 )
 
-            st.session_state.chat.append({
-                "question": question.strip(),
-                "answer": answer,
-            })
+            st.session_state.chat_history.append(("user", question))
+            st.session_state.chat_history.append(("assistant", answer))
+            st.session_state.rag_evidence = results
 
-        if st.session_state.chat:
-            for item in reversed(st.session_state.chat):
-                with st.expander(
-                    f"Q: {item['question']}",
-                    expanded=True,
-                ):
-                    st.markdown(item["answer"])
+        for role, message in st.session_state.chat_history[-12:]:
+            with st.chat_message(role):
+                st.write(message)
 
-            if st.button("Clear chat history"):
-                st.session_state.chat = []
-                st.rerun()
+        if st.session_state.rag_evidence:
+            with st.expander("📚 Retrieved Excel evidence"):
+                for item in st.session_state.rag_evidence:
+                    st.write(item)
 
-
-# --------------------------- ABOUT -------------------------
-
-if page == "About":
-    st.header("About CampusPulse")
-
+# -------------------- ABOUT --------------------
+else:
+    st.markdown("## ℹ️ About CampusPulse")
     st.markdown("""
-    **CampusPulse — Live College Intelligence Platform**
+    CampusPulse is a college-information dashboard built around uploaded
+    Excel workbooks.
 
-    - Excel college extraction
-    - Configurable Tier 1 / Tier 2 / Tier 3 classification
-    - College search and details
-    - OpenStreetMap location lookup
-    - Public review search links
-    - RAG-style retrieval over uploaded college records
-    - Optional Groq-powered answers
+    - Flexible Excel upload and manual column mapping
+    - Search and compare college records
+    - Transparent heuristic tier classification
+    - College map links and public review searches
+    - RAG retrieval with optional Groq-generated answers
 
-    **Powered by: Shivasharanappa**
+    **Important:** Tier labels are not official accreditation rankings.
+    Only use real, verified ratings and location coordinates.
     """)
-
-    st.warning(
-        "Tier labels are project-defined rules, not official rankings. "
-        "Verify autonomy, affiliation, and institutional status with "
-        "official sources before relying on a classification."
-    )
