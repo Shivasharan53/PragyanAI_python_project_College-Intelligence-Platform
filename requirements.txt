@@ -1,9 +1,9 @@
 streamlit
 pandas
 openpyxl
-requests
-folium
-streamlit-folium
+xlrd
+plotly
+pydeck
 scikit-learn
-langchain-core
-langchain-groq
+groq
+gradio
