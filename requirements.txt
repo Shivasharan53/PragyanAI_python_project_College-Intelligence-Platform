@@ -2,10 +2,8 @@ streamlit
 pandas
 openpyxl
 requests
-python-dotenv
 folium
 streamlit-folium
+scikit-learn
 langchain-core
 langchain-groq
-sentence-transformers
-faiss-cpu
